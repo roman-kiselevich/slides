@@ -7,5 +7,6 @@ import 'reveal.js/plugin/highlight/zenburn.css'
 
 let deck = new Reveal({
     plugins: [Markdown, Highlight],
+    slideNumber: 'c/t'
 });
 deck.initialize();

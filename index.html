@@ -4,26 +4,32 @@
     <meta charset="UTF-8"/>
     <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
     <title>Vite App</title>
+    <style>
+        :root {
+            --r-main-font-size: 26px !important;
+        }
+    </style>
 </head>
 <body>
 <div class="reveal">
     <div class="slides">
         <section data-markdown>
           <textarea data-template>
-            #### Spring Boot 3.2
+            ### Spring Boot 3.2
             ```diff
             - :: Spring Boot (v2.7.18) :: HTTP port = 0/0 :: PID: 25317
             + :: Spring Boot (v3.3.2) :: HTTP port = 0/0 :: PID: 25317
             ```
             ---
-            #### Agenda
+            ### Agenda
               * What has changed
               * Other libraries upgrades
+              * Struggling
               * Benefits/Pitfalls
               * Advices for future upgrades
               * Q&A
             ---
-            #### What has changed
+            ### What has changed
               [Autoconfiguration](https://github.com/gooddata/gdc-nas/pull/5321/files#diff-23a39ba336b56ccdd241d7c60de6e6bac71b64d16ae43c374e171469655588e6)
               ```diff
               - @ConstructorBinding
@@ -33,7 +39,7 @@
               + META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports
               ```
             ---
-            #### What has changed
+            ### What has changed
               Properties
               ```diff
               - spring.sleuth.web.additional-skip-pattern=${springdoc.api-docs.path}
@@ -47,7 +53,7 @@
               ```
               [etc.](https://github.com/spring-projects/spring-boot/wiki/Spring-Boot-3.0-Configuration-Changelog)
             ---
-            #### What has changed
+            ### What has changed
               Redirect of trailing slashes
 
               `/api/v1/entity/ - 308 Permanent Redirect -> /api/v1/entity`
@@ -59,20 +65,20 @@
               }
               ```
             ---
-            #### What has changed
+            ### What has changed
               Spring Doc 1.8 -> 2.5
             * Adjust the OpenApiCustomizers if you have any problem with generating the right docs
             ---
-            #### What has changed
+            ### What has changed
               Micrometer tracing support is now autoconfigured by default.
               This includes support for Brave, OpenTelemetry, Zipkin and Wavefront.
 
               Now we can unify the tracing configuration
             ---
-            #### What has changed
+            ### What has changed
               [Read the SB 3.0 release notes](https://github.com/spring-projects/spring-boot/wiki/Spring-Boot-3.0-Release-Notes)
             ---
-            #### Other libraries upgrades
+            ### Other libraries upgrades
               Exposed .38.2 -> .53
             * Lots of deprecated methods
             * Removed [PassingThreadLocalsCoroutineElement](https://github.com/JetBrains/Exposed/issues/1722)
@@ -81,32 +87,80 @@
             * replace became upsert. Don't use replace anymore
             * [Other breaking changes](http://jetbrains.github.io/Exposed/breaking-changes.html)
             ---
-            #### Other libraries upgrades
+            ### Other libraries upgrades
               gRPC 1.64 -> 1.66
             * [1.64 wasn't compatible with Netty 4.1.111.Final](https://github.com/grpc/grpc-java/issues/11284#issuecomment-2197633242)
+            ---
+            ### Struggling
+            * PulsarAutoconfiguration was broken after the upgrade
+            ```kotlin [|11,17,18]
+            // prepare a BeanDefinition for a Listener instance if it's not present
+            val listenerName = "$consumerIdentification-default-message-listener"
+            GenericBeanDefinition().apply {
+                setBeanClass(PulsarListener::class.java)
+                setInstanceSupplier {
+                    val messageHandlers =
+                        mutableListOf(factory.getBean<PulsarListenerMessageHandler<ByteArray>>(loggingHandler))
+                    // should also support multiple application-defined messageHandlers
+                    if (consumerProperties.messageHandlerName != null) {
+                        messageHandlers.add(
+                            factory.getBean<PulsarListenerMessageHandler<ByteArray>>(consumerProperties.messageHandlerName)
+                        )
+                    }
+
+                    PulsarListener(
+                        currentTraceContext,
+                        factory.getBean<PulsarListenerAckHandler<ByteArray>>(ackHandler),
+                        factory.getBean<PulsarListenerExceptionHandler<ByteArray>>(exceptionHandler),
+                        messageHandlers,
+                        pulsarMetrics,
+                        consumerProperties.processingTimeoutMs,
+                    )
+                }
+                factory.registerBeanDefinition(listenerName, this)
+            }
+            ```
+            ---
+            ### Struggling
+              * factory.getBean() has undefined behaviour while getting a bean in PostProcessor phase
+              * You have to address beans only by their names (references)
+              * [Baeldung guide](https://www.baeldung.com/spring-beans-dynamic-registration-properties#31-configuration-class)
+              ```kotlin [|4-12]
+                // use custom MessageListener implementation if present
+                return consumerProperties.listenerName ?: "$consumerIdentification-default-message-listener".also {
+                    val defBuilder = BeanDefinitionBuilder.genericBeanDefinition(PulsarListener::class.java).apply {
+                        addCollectionOfBeansByReferences(
+                            PulsarListener<*>::handlers,
+                            listOfNotNull(loggingHandler, consumerProperties.messageHandlerName)
+                        )
+                        addKPropertyValueByReference(PulsarListener<*>::currentTraceContext, BRAVE_CURRENT_TRACE_CONTEXT_BEAN)
+                        addKPropertyValueByReference(PulsarListener<*>::ackHandler, ackHandler)
+                        addKPropertyValueByReference(PulsarListener<*>::exceptionHandler, exceptionHandler)
+                        addKPropertyValueByReference(PulsarListener<*>::pulsarMetrics, PULSAR_METRICS_BEAN)
+                        addKPropertyValue(PulsarListener<*>::processingTimeoutMs, consumerProperties.processingTimeoutMs)
+                    }
+
+                    registry.registerBeanDefinition(it, defBuilder.beanDefinition)
+                }
+              ```
             ---
             ### Benefits
             * Less vulnerabilities
             * Spring Boot 3.0 applications can now be converted into GraalVM native images
             * Better performance
-          </textarea>
-        </section>
-        <section>
-          <h3>Benefits</h3>
-          <img data-src="/postgres.png" src="/postgres.png">
-        </section>
-      <section data-markdown>
-          <textarea data-template>
+            ---
             ### Pitfalls
             * Lots of deprecated methods that wasn't fixed in the upgrade
             * New bugs
             * Broke some local setups
             ---
             ### Advices for future upgrades
-            * Don’t upgrade the spring doc if not needed (the quality of this library is really bad)
-            * Don’t upgrade the exposed if not needed
-            (there are lots of changes between minor versions because it wasn’t released yet to a stable 1.X.X version)
-            * Don’t upgrade anything if not needed for Spring Boot migration
+            * Be careful while upgrading the spring doc
+            (don't use the latest changes if not needed the quality of this library is really bad)
+            * Be careful while upgrading the exposed
+            (there are lots of changes between minor versions because it hasn't released yet to a stable 1.X.X version)
+            * Be careful while upgrading anything for Spring Boot migration
+            (check if a library can be migrated later/separately from SB)
             ---
             ### Advices for future upgrades
             * Firstly migrate the stock and oauth2 libraries
@@ -155,7 +209,7 @@
             ### Q&A
             #### Thank you for attention
           </textarea>
-      </section>
+        </section>
     </div>
 </div>
 <!--suppress HtmlUnknownTarget -->
